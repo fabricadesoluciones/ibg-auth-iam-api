@@ -1,0 +1,67 @@
+service: ibg-auth-iam-api
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  timeout: 30
+  deploymentMethod: direct
+  deploymentBucket:
+    name: portal-fd-deployments-dev-861330781134
+
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+          Resource: "*"
+
+  environment:
+    NODE_ENV: production
+    ENVIRONMENT: ${self:provider.stage}
+    DB_HOST: ${ssm:/portal-fd/dev/network/rds-endpoint}
+    DB_PORT: ${env:DB_PORT, '3306'}
+    DB_NAME: ${env:DB_NAME}
+    DB_USER: ${env:DB_USER}
+    DB_PWD: ${env:DB_PWD}
+    CORS_ORIGIN: ${env:CORS_ORIGIN}
+    JWT_SECRETS: ${env:JWT_SECRETS}
+    JWT_ACTIVE_KID: ${env:JWT_ACTIVE_KID, '0'}
+    JWT_EXPIRES_IN: ${env:JWT_EXPIRES_IN, '1h'}
+    FIRST_ACCESS_TOKEN_EXPIRES_IN: ${env:FIRST_ACCESS_TOKEN_EXPIRES_IN, '30m'}
+    MFA_FORCE_FOR_ALL: ${env:MFA_FORCE_FOR_ALL, 'false'}
+    MFA_CODE_EXPIRES_IN_MINUTES: ${env:MFA_CODE_EXPIRES_IN_MINUTES, '10'}
+    MFA_EMAIL_ENABLED: ${env:MFA_EMAIL_ENABLED, 'true'}
+    PASSWORD_RESET_TOKEN_EXPIRES_IN_MINUTES: ${env:PASSWORD_RESET_TOKEN_EXPIRES_IN_MINUTES, '5'}
+    PROVIDER_PORTAL_URL: ${env:PROVIDER_PORTAL_URL, ''}
+    SMTP_HOST: ${env:SMTP_HOST, ''}
+    SMTP_PORT: ${env:SMTP_PORT, '587'}
+    SMTP_SECURE: ${env:SMTP_SECURE, 'false'}
+    SMTP_USER: ${env:SMTP_USER, ''}
+    SMTP_PASS: ${env:SMTP_PASS, ''}
+    SMTP_FROM: ${env:SMTP_FROM}
+    ENTRA_CLIENT_ID: ${env:ENTRA_CLIENT_ID}
+    ENTRA_TENANT_ID: ${env:ENTRA_TENANT_ID}
+    ENTRA_CLIENT_SECRET: ${env:ENTRA_CLIENT_SECRET}
+    ENTRA_REDIRECT_URI: ${env:ENTRA_REDIRECT_URI}
+
+functions:
+  api:
+    handler: src/index.handler
+    vpc:
+      securityGroupIds:
+        - ${ssm:/portal-fd/dev/network/lambda-sg-id}
+      subnetIds:
+        "Fn::Split": [",", "${ssm:/portal-fd/dev/network/private-subnet-ids}"]
+    events:
+      - http:
+          path: /
+          method: any
+          cors: true
+      - http:
+          path: /{proxy+}
+          method: any
+          cors: true

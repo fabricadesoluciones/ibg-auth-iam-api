@@ -2,6 +2,7 @@ require("dotenv").config();
 
 const cors = require("cors");
 const express = require("express");
+const serverless = require("serverless-http");
 
 const app = express();
 const port = Number(process.env.PORT || 9002);
@@ -48,6 +49,12 @@ app.use((error, _req, res, _next) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`ibg-auth-iam-api escuchando en el puerto ${port}`);
-});
+// Lambda invokes the exported handler. Keep the HTTP listener only for local
+// execution (`npm start` / `npm run dev`).
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`ibg-auth-iam-api escuchando en el puerto ${port}`);
+  });
+}
+
+module.exports.handler = serverless(app);
