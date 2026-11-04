@@ -1,7 +1,7 @@
 const express = require("express");
-const controller = require("../controllers/providers");
+const { resetProviderPassword } = require("../controllers/providers");
 
 const router = express.Router();
-router.use(controller);
+router.post("/:id/reset-password", resetProviderPassword);
 
 module.exports = router;

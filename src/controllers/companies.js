@@ -1,10 +1,7 @@
-const express = require("express");
 const { assertDatabaseConfigured } = require("../database");
 const { Company } = require("../models");
 
-const router = express.Router();
-
-router.get("/", async (req, res, next) => {
+const getCompanies = async (_req, res, next) => {
   try {
     assertDatabaseConfigured();
     const companies = await Company.findAll({
@@ -27,6 +24,6 @@ router.get("/", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+};
 
-module.exports = router;
+module.exports = { getCompanies };

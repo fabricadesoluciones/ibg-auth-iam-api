@@ -1,10 +1,8 @@
-const express = require("express");
 const { Op, col, cast, where } = require("sequelize");
 const bcrypt = require("bcryptjs");
 const { assertDatabaseConfigured } = require("../database");
 const { User, Role, Company, UserCompany } = require("../models");
 
-const router = express.Router();
 const userAttributes = [
   "id",
   "name",
@@ -92,7 +90,7 @@ const replaceCompanies = async (userId, companyIds, transaction) => {
     );
 };
 
-router.get("/", async (req, res, next) => {
+const getUsers = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const query = req.query;
@@ -201,9 +199,9 @@ router.get("/", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+};
 
-router.get("/deleted", async (req, res, next) => {
+const getDeletedUsers = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const page = positiveInt(req.query.page, 1);
@@ -241,9 +239,9 @@ router.get("/deleted", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+};
 
-router.get("/:id", async (req, res, next) => {
+const getUserById = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const id = positiveInt(req.params.id, null);
@@ -275,9 +273,9 @@ router.get("/:id", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+};
 
-router.post("/create", async (req, res, next) => {
+const createUser = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const {
@@ -326,9 +324,9 @@ router.post("/create", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+};
 
-router.put("/update/:id", async (req, res, next) => {
+const updateUser = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const id = positiveInt(req.params.id, null);
@@ -374,9 +372,9 @@ router.put("/update/:id", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+};
 
-router.delete("/delete/:id", async (req, res, next) => {
+const deleteUser = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const user = await User.findByPk(req.params.id);
@@ -389,9 +387,9 @@ router.delete("/delete/:id", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+};
 
-router.put("/restore/:id", async (req, res, next) => {
+const restoreUser = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const user = await User.findByPk(req.params.id, { paranoid: false });
@@ -405,31 +403,27 @@ router.put("/restore/:id", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+};
 
-router.put("/reset-password/:id", async (req, res, next) => {
+const resetUserPassword = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const password = text(req.body?.password);
     if (password.length < 6)
-      return res
-        .status(400)
-        .json({
-          code: -1,
-          message: "La contrasena debe tener al menos 6 caracteres",
-        });
+      return res.status(400).json({
+        code: -1,
+        message: "La contrasena debe tener al menos 6 caracteres",
+      });
     const user = await User.findByPk(req.params.id);
     if (!user)
       return res
         .status(404)
         .json({ code: -1, message: "Usuario no encontrado" });
     if (user.is_ldap)
-      return res
-        .status(400)
-        .json({
-          code: -1,
-          message: "No se puede resetear la contrasena de un usuario LDAP",
-        });
+      return res.status(400).json({
+        code: -1,
+        message: "No se puede resetear la contrasena de un usuario LDAP",
+      });
     await user.update({
       password_hash: await bcrypt.hash(password, 10),
       temporary_password: false,
@@ -445,6 +439,15 @@ router.put("/reset-password/:id", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+};
 
-module.exports = router;
+module.exports = {
+  getUsers,
+  getDeletedUsers,
+  getUserById,
+  createUser,
+  updateUser,
+  deleteUser,
+  restoreUser,
+  resetUserPassword,
+};

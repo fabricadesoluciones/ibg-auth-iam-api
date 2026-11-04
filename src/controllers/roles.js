@@ -1,4 +1,3 @@
-const express = require("express");
 const { Op } = require("sequelize");
 const { assertDatabaseConfigured } = require("../database");
 const {
@@ -10,7 +9,6 @@ const {
   User,
 } = require("../models");
 
-const router = express.Router();
 const parsePositiveInt = (value, fallback) => {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -139,7 +137,7 @@ const validateScope = async (body, roleId, transaction) => {
   return payload;
 };
 
-router.get("/", async (req, res, next) => {
+const getRoles = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const page = parsePositiveInt(req.query.page, 1);
@@ -200,9 +198,9 @@ router.get("/", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+};
 
-router.get("/detail/:id", async (req, res, next) => {
+const getRoleDetail = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const role = await Role.findByPk(req.params.id, {
@@ -218,8 +216,8 @@ router.get("/detail/:id", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
-router.post("/create", async (req, res, next) => {
+};
+const createRole = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const role = await Role.sequelize.transaction(async (transaction) => {
@@ -240,8 +238,8 @@ router.post("/create", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
-router.put("/update/:id", async (req, res, next) => {
+};
+const updateRole = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const id = Number(req.params.id);
@@ -272,34 +270,35 @@ router.put("/update/:id", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
-router.delete("/delete/:id", async (req, res, next) => {
+};
+const deleteRole = async (req, res, next) => {
   try {
     assertDatabaseConfigured();
     const id = Number(req.params.id);
     if (id === 1)
-      return res
-        .status(400)
-        .json({
-          code: -1,
-          message: "El rol administrador no se puede eliminar.",
-        });
+      return res.status(400).json({
+        code: -1,
+        message: "El rol administrador no se puede eliminar.",
+      });
     const role = await Role.findByPk(id);
     if (!role)
       return res.status(404).json({ code: -1, message: "Rol no encontrado" });
     if (await User.count({ where: { role_id: id } }))
-      return res
-        .status(400)
-        .json({
-          code: -1,
-          message:
-            "No se puede eliminar el rol porque tiene usuarios asignados.",
-        });
+      return res.status(400).json({
+        code: -1,
+        message: "No se puede eliminar el rol porque tiene usuarios asignados.",
+      });
     await role.destroy();
     res.json({ code: 1, message: "Rol eliminado correctamente" });
   } catch (error) {
     next(error);
   }
-});
+};
 
-module.exports = router;
+module.exports = {
+  getRoles,
+  getRoleDetail,
+  createRole,
+  updateRole,
+  deleteRole,
+};

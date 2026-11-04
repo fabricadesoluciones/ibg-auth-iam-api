@@ -1,9 +1,6 @@
-const express = require("express");
 const { assertDatabaseConfigured } = require("../database");
 const { Op } = require("sequelize");
 const { Area, Department, Position, Role } = require("../models");
-
-const router = express.Router();
 
 const snapshot = async (_req, res, next) => {
   try {
@@ -27,11 +24,6 @@ const snapshot = async (_req, res, next) => {
     next(error);
   }
 };
-
-// The legacy API exposed the snapshot at /snapshot.  The root alias supports
-// consumers already calling /organizationalCatalogs during the migration.
-router.get("/", snapshot);
-router.get("/snapshot", snapshot);
 
 const id = (value) => {
   const parsed = Number(value);
@@ -135,13 +127,11 @@ const create = (type) => async (req, res, next) => {
       throw fail(`Ya existe un ${label} con ese nombre`);
     }
     const created = await Model.create({ ...scope, ...data });
-    res
-      .status(201)
-      .json({
-        code: 1,
-        message: `${label} creado correctamente`,
-        data: created,
-      });
+    res.status(201).json({
+      code: 1,
+      message: `${label} creado correctamente`,
+      data: created,
+    });
   } catch (error) {
     next(error);
   }
@@ -203,17 +193,18 @@ const remove = (type) => async (req, res, next) => {
   }
 };
 
-router.get("/areas", list("area"));
-router.post("/areas", create("area"));
-router.put("/areas/:id", update("area"));
-router.delete("/areas/:id", remove("area"));
-router.get("/departments", list("department"));
-router.post("/departments", create("department"));
-router.put("/departments/:id", update("department"));
-router.delete("/departments/:id", remove("department"));
-router.get("/positions", list("position"));
-router.post("/positions", create("position"));
-router.put("/positions/:id", update("position"));
-router.delete("/positions/:id", remove("position"));
-
-module.exports = router;
+module.exports = {
+  snapshot,
+  listAreas: list("area"),
+  createArea: create("area"),
+  updateArea: update("area"),
+  deleteArea: remove("area"),
+  listDepartments: list("department"),
+  createDepartment: create("department"),
+  updateDepartment: update("department"),
+  deleteDepartment: remove("department"),
+  listPositions: list("position"),
+  createPosition: create("position"),
+  updatePosition: update("position"),
+  deletePosition: remove("position"),
+};
