@@ -1,12 +1,7 @@
 const express = require("express");
+const controller = require("../controllers/health");
 
 const router = express.Router();
-
-router.get("/health", (_req, res) => {
-  res.status(200).json({
-    service: "ibg-auth-iam-api",
-    status: "ok",
-  });
-});
+router.use(controller);
 
 module.exports = router;
