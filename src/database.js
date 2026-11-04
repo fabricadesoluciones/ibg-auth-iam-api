@@ -14,13 +14,15 @@ const sequelize = new Sequelize(
     dialect: "mysql",
     logging: false,
     pool: { max: 5, min: 0, acquire: 30000, idle: 10000 },
-  }
+  },
 );
 
 const assertDatabaseConfigured = () => {
   const keys = missing();
   if (keys.length) {
-    const error = new Error(`Faltan variables de base de datos: ${keys.join(", ")}`);
+    const error = new Error(
+      `Faltan variables de base de datos: ${keys.join(", ")}`,
+    );
     error.statusCode = 503;
     throw error;
   }
