@@ -1,9 +1,9 @@
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
 const { Op } = require("sequelize");
 const { assertDatabaseConfigured } = require("../database");
+const { sendEmail } = require("../services/emailService");
 const {
   User,
   UserSession,
@@ -139,18 +139,12 @@ const createFirstAccessToken = (user, type) => {
   };
 };
 const sendMail = async ({ to, subject, text, html }) => {
-  if (String(process.env.MFA_EMAIL_ENABLED || "false").toLowerCase() !== "true")
+  if (
+    String(process.env.MFA_EMAIL_ENABLED || "false").toLowerCase() !== "true"
+  ) {
     return false;
-  const { SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM } = process.env;
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !SMTP_FROM)
-    throw fail("El correo esta habilitado pero SMTP no esta configurado", 503);
-  const transport = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: String(process.env.SMTP_SECURE) === "true",
-    auth: { user: SMTP_USER, pass: SMTP_PASS },
-  });
-  await transport.sendMail({ from: SMTP_FROM, to, subject, text, html });
+  }
+  await sendEmail({ to, subject, text, html });
   return true;
 };
 const issueMfa = async (user) => {

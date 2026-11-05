@@ -60,6 +60,8 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           SMTP_FROM: ${{ vars.SMTP_FROM }}
+          SEND_EMAIL_TEST: ${{ vars.SEND_EMAIL_TEST }}
+          SEND_EMAIL_TEST_TO: ${{ vars.SEND_EMAIL_TEST_TO }}
           ENTRA_CLIENT_ID: ${{ secrets.ENTRA_CLIENT_ID }}
           ENTRA_TENANT_ID: ${{ secrets.ENTRA_TENANT_ID }}
           ENTRA_CLIENT_SECRET: ${{ secrets.ENTRA_CLIENT_SECRET }}
