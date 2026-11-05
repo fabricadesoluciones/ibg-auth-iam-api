@@ -3,7 +3,11 @@ const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const { Op } = require("sequelize");
 const { assertDatabaseConfigured } = require("../database");
-const { sendEmail } = require("../services/emailService");
+const {
+  sendEmail,
+  buildMfaEmail,
+  buildPasswordResetEmail,
+} = require("../services/emailService");
 const {
   User,
   UserSession,
@@ -169,9 +173,11 @@ const issueMfa = async (user) => {
   try {
     await sendMail({
       to: user.email,
-      subject: "Codigo de verificacion",
-      text: `Tu codigo de acceso es: ${code}`,
-      html: `<p>Tu codigo de acceso es: <strong>${code}</strong></p>`,
+      ...buildMfaEmail({
+        name: user.name,
+        code,
+        expiresInMinutes: minutes(process.env.MFA_CODE_EXPIRES_IN_MINUTES, 10),
+      }),
     });
   } catch (error) {
     deliveryError = error.message;
@@ -306,9 +312,11 @@ const resendMfa = asyncRoute(async (req, res) => {
   try {
     await sendMail({
       to: user.email,
-      subject: "Codigo de verificacion",
-      text: `Tu codigo de acceso es: ${code}`,
-      html: `<p>Tu codigo de acceso es: <strong>${code}</strong></p>`,
+      ...buildMfaEmail({
+        name: user.name,
+        code,
+        expiresInMinutes: minutes(process.env.MFA_CODE_EXPIRES_IN_MINUTES, 10),
+      }),
     });
   } catch (_) {
     /* challenge remains valid */
@@ -424,11 +432,15 @@ const forgotPassword = asyncRoute(async (req, res) => {
       process.env.FRONTEND_URL ||
       "http://localhost:8080",
   ).replace(/\/$/, "");
-  await sendMail({
+  await sendEmail({
     to: user.email,
-    subject: "Recuperar contrasena",
-    text: `${base}/reset-password/${rawToken}`,
-    html: `<p><a href="${base}/reset-password/${rawToken}">Recuperar contrasena</a></p>`,
+    ...buildPasswordResetEmail({
+      resetLink: `${base}/reset-password/${rawToken}`,
+      expiresInMinutes: minutes(
+        process.env.PASSWORD_RESET_TOKEN_EXPIRES_IN_MINUTES,
+        5,
+      ),
+    }),
   });
   return res.json(response);
 });
