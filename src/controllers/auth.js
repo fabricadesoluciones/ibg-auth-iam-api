@@ -13,6 +13,10 @@ const {
   UserSession,
   RolePermission,
   PasswordResetToken,
+  Area,
+  Department,
+  Position,
+  Role,
 } = require("../models");
 
 const asyncRoute = (handler) => (req, res, next) =>
@@ -102,6 +106,119 @@ const userPayload = async (user) => ({
   microsoft_payload: user.microsoft_payload || null,
   permissions: await permissionsFor(user.role_id),
 });
+const DEFAULT_INTERNAL_ROLE_NAMES = [
+  "usuario",
+  "operador",
+  "user",
+  "empleado",
+  "colaborador",
+];
+const normalizeCatalogValue = (value) =>
+  String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+const firstText = (...values) =>
+  values.find((value) => typeof value === "string" && value.trim())?.trim() || null;
+const fetchMicrosoftProfile = async (accessToken) => {
+  if (!accessToken) return null;
+  const response = await fetch(
+    "https://graph.microsoft.com/v1.0/me?$select=displayName,givenName,surname,mail,userPrincipalName,department,companyName,jobTitle,officeLocation,onPremisesExtensionAttributes",
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw fail(
+      data?.error?.message || "No se pudo consultar el perfil de Microsoft Graph",
+      401,
+    );
+  }
+  return data;
+};
+const microsoftOrganization = (claims, profile) => {
+  const extension = profile?.onPremisesExtensionAttributes || {};
+  return {
+    area: firstText(
+      extension.extensionAttribute2,
+      extension.ExtensionAttribute2,
+      profile?.companyName,
+      profile?.officeLocation,
+      claims?.companyName,
+      claims?.officeLocation,
+      claims?.physicalDeliveryOfficeName,
+    ),
+    department: firstText(profile?.department, claims?.department),
+    position: firstText(profile?.jobTitle, claims?.jobTitle, claims?.title),
+  };
+};
+const ensureCatalogItem = async ({ model, name, where, description, transaction }) => {
+  const requestedName = firstText(name) || "General";
+  let item = await model.findOne({
+    where: { ...where, name: requestedName },
+    paranoid: false,
+    transaction,
+  });
+  if (item) {
+    if (item.deleted_at) await item.restore({ transaction });
+    return item;
+  }
+  return model.create(
+    { ...where, name: requestedName, description },
+    { transaction },
+  );
+};
+const resolveMicrosoftRole = async (organization) =>
+  User.sequelize.transaction(async (transaction) => {
+    const area = await ensureCatalogItem({
+      model: Area,
+      name: organization.area,
+      where: {},
+      description: "Creada automaticamente desde Microsoft SSO",
+      transaction,
+    });
+    const department = await ensureCatalogItem({
+      model: Department,
+      name: organization.department,
+      where: { area_id: area.id },
+      description: "Creado automaticamente desde Microsoft SSO",
+      transaction,
+    });
+    const position = await ensureCatalogItem({
+      model: Position,
+      name: organization.position,
+      where: { area_id: area.id, department_id: department.id },
+      description: "Creado automaticamente desde Microsoft SSO",
+      transaction,
+    });
+    const roles = await Role.findAll({
+      where: { area_id: area.id, department_id: department.id, position_id: position.id },
+      order: [["id", "ASC"]],
+      transaction,
+    });
+    const normalizedPosition = normalizeCatalogValue(organization.position);
+    const role =
+      roles.find((item) => normalizeCatalogValue(item.name) === normalizedPosition) ||
+      roles.find((item) => DEFAULT_INTERNAL_ROLE_NAMES.includes(normalizeCatalogValue(item.name))) ||
+      (roles.length === 1 ? roles[0] : null);
+    if (!role) {
+      throw fail(
+        "No existe un rol configurado para el alcance organizacional del usuario de Microsoft.",
+        403,
+      );
+    }
+    return { role, area, department, position };
+  });
+const microsoftUserName = (claims, profile, email) =>
+  firstText(
+    profile?.displayName,
+    claims?.name,
+    claims?.given_name && claims?.family_name
+      ? `${claims.given_name} ${claims.family_name}`
+      : null,
+    email?.split("@")[0],
+  ) || "Usuario interno";
 const providerUser = (user) => !bool(user.is_ldap) && bool(user.mfa_enabled);
 const firstAccess = (user, type) =>
   portalType(type) === "proveedor" &&
@@ -517,13 +634,52 @@ const loginWithMicrosoftSso = asyncRoute(async (req, res) => {
   const email = String(claims.email || claims.preferred_username || "")
     .trim()
     .toLowerCase();
-  const user = await User.findOne({ where: { email, is_active: true } });
-  if (!user)
-    throw fail("Tu correo de Microsoft no esta registrado en el portal", 403);
+  if (!email) throw fail("Microsoft no devolvio un correo para el usuario", 401);
+
+  let profile = null;
+  try {
+    profile = await fetchMicrosoftProfile(data.access_token);
+  } catch (_) {
+    // Los claims del id_token siguen siendo suficientes para resolver el alcance.
+  }
+  const organization = microsoftOrganization(claims, profile);
+  const resolution = await resolveMicrosoftRole(organization);
+  let user = await User.findOne({ where: { email }, paranoid: false });
+
+  if (!user) {
+    user = await User.create({
+      role_id: resolution.role.id,
+      name: microsoftUserName(claims, profile, email),
+      email,
+      password_hash: null,
+      status: "active",
+      temporary_password: false,
+      email_verified_at: new Date(),
+      password_reset_attempts: 0,
+      last_failed_login: null,
+      is_ldap: true,
+      mfa_enabled: false,
+      is_active: true,
+    });
+  } else {
+    if (user.deleted_at) await user.restore();
+    await user.update({
+      role_id: user.role_id || resolution.role.id,
+      name: user.name || microsoftUserName(claims, profile, email),
+      status: "active",
+      temporary_password: false,
+      email_verified_at: user.email_verified_at || new Date(),
+      is_active: true,
+      is_ldap: true,
+    });
+  }
   await user.update({
     is_ldap: true,
     microsoft_payload: JSON.stringify({
       claims,
+      profile,
+      organization,
+      assigned_role: { id: resolution.role.id, name: resolution.role.name },
       updated_at: new Date().toISOString(),
     }),
   });
