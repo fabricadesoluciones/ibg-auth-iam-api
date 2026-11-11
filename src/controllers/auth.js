@@ -17,6 +17,7 @@ const {
   Department,
   Position,
   Role,
+  UserPermission,
 } = require("../models");
  
 const asyncRoute = (handler) => (req, res, next) =>
@@ -71,41 +72,71 @@ const sign = (payload, expiresIn = process.env.JWT_EXPIRES_IN || "1h") => {
     expiresIn,
   });
 };
-const permissionsFor = async (roleId) => {
-  if (!roleId) return [];
+const permissionsFor = async (roleIds, permissionIds = null) => {
+  if (!roleIds.length && !permissionIds?.length) return [];
   const rows = await RolePermission.findAll({
-    where: { role_id: roleId },
+    where: permissionIds?.length
+      ? { permission_id: { [Op.in]: permissionIds } }
+      : { role_id: { [Op.in]: roleIds } },
     raw: true,
   });
-  return rows.map(
-    ({
-      permission_id,
-      create_permission,
-      update_permission,
-      delete_permission,
-      synchronize_permission,
-      view_permission,
-    }) => ({
-      permission_id: Number(permission_id),
-      create_permission: bool(create_permission),
-      update_permission: bool(update_permission),
-      delete_permission: bool(delete_permission),
-      synchronize_permission: bool(synchronize_permission),
-      view_permission: bool(view_permission),
-    }),
-  );
+  const merged = new Map();
+  rows.forEach((permission) => {
+    const id = Number(permission.permission_id);
+    const previous = merged.get(id) || {
+      permission_id: id,
+      create_permission: false,
+      update_permission: false,
+      delete_permission: false,
+      synchronize_permission: false,
+      view_permission: false,
+    };
+    previous.create_permission ||= bool(permission.create_permission);
+    previous.update_permission ||= bool(permission.update_permission);
+    previous.delete_permission ||= bool(permission.delete_permission);
+    previous.synchronize_permission ||= bool(permission.synchronize_permission);
+    previous.view_permission ||= bool(permission.view_permission);
+    merged.set(id, previous);
+  });
+  return [...merged.values()];
 };
-const userPayload = async (user) => ({
+const userPayload = async (user) => {
+  const assigned = await UserPermission.findAll({
+    where: { user_id: user.id },
+    attributes: ["permission_id"],
+    raw: true,
+  });
+  const permissionIds = assigned
+    .map((row) => Number(row.permission_id))
+    .filter(Number.isInteger);
+  const roleIds = user.role_id ? [Number(user.role_id)] : [];
+  return {
   id: user.id,
   name: user.name,
   email: user.email,
   role_id: user.role_id,
+  roleIds,
   status: user.status,
   temporary_password: bool(user.temporary_password),
   password_reset_attempts: Number(user.password_reset_attempts || 0),
   microsoft_payload: user.microsoft_payload || null,
-  permissions: await permissionsFor(user.role_id),
-});
+  permissions: await permissionsFor(roleIds, permissionIds.length ? permissionIds : null),
+  };
+};
+const seedUserPermissions = async (userId, roleId) => {
+  if (!roleId) return;
+  const rows = await RolePermission.findAll({
+    where: { role_id: roleId },
+    attributes: ["permission_id"],
+    raw: true,
+  });
+  const permissionIds = [...new Set(rows.map((row) => Number(row.permission_id)).filter(Number.isInteger))];
+  if (permissionIds.length)
+    await UserPermission.bulkCreate(
+      permissionIds.map((permission_id) => ({ user_id: userId, permission_id })),
+      { ignoreDuplicates: true },
+    );
+};
 const DEFAULT_INTERNAL_ROLE_NAMES = [
   "usuario",
   "operador",
@@ -665,6 +696,7 @@ const loginWithMicrosoftSso = asyncRoute(async (req, res) => {
       mfa_enabled: false,
       is_active: true,
     });
+    await seedUserPermissions(user.id, resolution.role?.id);
   } else {
     if (user.deleted_at) await user.restore();
     await user.update({

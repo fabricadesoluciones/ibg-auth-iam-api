@@ -8,6 +8,7 @@ const defineRole = require("./roles");
 const defineRolePermission = require("./role_permissions");
 const defineUser = require("./users");
 const defineUserCompany = require("./user_companies");
+const defineUserPermission = require("./user_permissions");
 const defineUserSession = require("./user_sessions");
 
 const initModels = (sequelize) => {
@@ -20,6 +21,7 @@ const initModels = (sequelize) => {
   const RolePermission = defineRolePermission(sequelize, DataTypes);
   const User = defineUser(sequelize, DataTypes);
   const UserCompany = defineUserCompany(sequelize, DataTypes);
+  const UserPermission = defineUserPermission(sequelize, DataTypes);
   const UserSession = defineUserSession(sequelize, DataTypes);
 
   Department.belongsTo(Area, { as: "area", foreignKey: "area_id" });
@@ -52,6 +54,8 @@ const initModels = (sequelize) => {
     foreignKey: "company_id",
     otherKey: "user_id",
   });
+  User.hasMany(UserPermission, { as: "permission_assignments", foreignKey: "user_id" });
+  UserPermission.belongsTo(User, { as: "user", foreignKey: "user_id" });
 
   return {
     Area,
@@ -63,6 +67,7 @@ const initModels = (sequelize) => {
     RolePermission,
     User,
     UserCompany,
+    UserPermission,
     UserSession,
   };
 };

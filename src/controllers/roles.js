@@ -283,7 +283,9 @@ const deleteRole = async (req, res, next) => {
     const role = await Role.findByPk(id);
     if (!role)
       return res.status(404).json({ code: -1, message: "Rol no encontrado" });
-    if (await User.count({ where: { role_id: id } }))
+    if (
+      (await User.count({ where: { role_id: id } }))
+    )
       return res.status(400).json({
         code: -1,
         message: "No se puede eliminar el rol porque tiene usuarios asignados.",

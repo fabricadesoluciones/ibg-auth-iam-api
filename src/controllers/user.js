@@ -1,7 +1,7 @@
 const { Op, col, cast, where } = require("sequelize");
 const bcrypt = require("bcryptjs");
 const { assertDatabaseConfigured } = require("../database");
-const { User, Role, Company, UserCompany } = require("../models");
+const { User, Role, Company, UserCompany, UserPermission, RolePermission } = require("../models");
 
 const userAttributes = [
   "id",
@@ -33,10 +33,12 @@ const flag = (value) => {
   if (["no", "false", "0"].includes(normalized)) return false;
   return null;
 };
-const serialize = (user) => ({
+const serialize = (user) => {
+  return {
   id: user.id,
   name: user.name,
-  role_id: user.role_id,
+  role_id: user.role_id ? Number(user.role_id) : null,
+  roleIds: user.role_id ? [Number(user.role_id)] : [],
   email: user.email,
   status: user.status,
   temporary_password: user.temporary_password,
@@ -50,7 +52,8 @@ const serialize = (user) => ({
   companyIds: (user.companies || [])
     .map((company) => Number(company.id))
     .filter(Number.isInteger),
-});
+  };
+};
 const companyInclude = {
   model: Company,
   as: "companies",
@@ -66,17 +69,11 @@ const normalizeCompanyIds = (value) => [
   ),
 ];
 const ADMIN_ROLE_ID = 1;
-const assertAdminCapacity = async ({ user, roleId, isActive, transaction }) => {
-  if (Number(roleId) !== ADMIN_ROLE_ID || !Boolean(isActive)) return;
-
-  const isAlreadyActiveAdmin =
-    user && Number(user.role_id) === ADMIN_ROLE_ID && Boolean(user.is_active);
+const assertAdminCapacity = async ({ user, roleIds, isActive, transaction }) => {
+  if (!roleIds.includes(ADMIN_ROLE_ID) || !Boolean(isActive)) return;
+  const isAlreadyActiveAdmin = user && Boolean(user.is_active) && Number(user.role_id) === ADMIN_ROLE_ID;
   if (isAlreadyActiveAdmin) return;
-
-  const activeAdmins = await User.count({
-    where: { role_id: ADMIN_ROLE_ID, is_active: true },
-    transaction,
-  });
+  const activeAdmins = await User.count({ where: { role_id: ADMIN_ROLE_ID, is_active: true }, transaction });
   if (activeAdmins >= 2) {
     const error = new Error("Solo pueden existir dos usuarios activos con el rol Admin.");
     error.statusCode = 400;
@@ -106,6 +103,35 @@ const replaceCompanies = async (userId, companyIds, transaction) => {
       companyIds.map((company_id) => ({ user_id: userId, company_id })),
       { transaction },
     );
+};
+const normalizeRoleIds = (value) => [
+  ...new Set((Array.isArray(value) ? value : []).map(optionalPositiveInt).filter(Boolean)),
+];
+const validateRoleIds = async (roleIds, transaction) => {
+  if (!roleIds.length) return [];
+  const roles = await Role.findAll({
+    where: { id: { [Op.in]: roleIds } },
+    attributes: ["id"],
+    transaction,
+  });
+  if (roles.length !== roleIds.length) {
+    const error = new Error("Uno o mas roles seleccionados no existen");
+    error.statusCode = 400;
+    throw error;
+  }
+  return roleIds;
+};
+const replaceUserPermissions = async (userId, roleIds, transaction) => {
+  const rolePermissions = await RolePermission.findAll({
+    where: { role_id: { [Op.in]: roleIds } },
+    attributes: ["permission_id"],
+    raw: true,
+    transaction,
+  });
+  const permissionIds = [...new Set(rolePermissions.map((row) => Number(row.permission_id)).filter(Number.isInteger))];
+  await UserPermission.destroy({ where: { user_id: userId }, force: true, transaction });
+  if (permissionIds.length)
+    await UserPermission.bulkCreate(permissionIds.map((permission_id) => ({ user_id: userId, permission_id })), { transaction });
 };
 
 const getUsers = async (req, res, next) => {
@@ -270,15 +296,7 @@ const getUserById = async (req, res, next) => {
     }
     const user = await User.findByPk(id, {
       attributes: userAttributes,
-      include: [
-        {
-          model: Company,
-          as: "companies",
-          attributes: ["id"],
-          through: { attributes: [] },
-          required: false,
-        },
-      ],
+      include: [companyInclude],
       // Matches the legacy detail endpoint, which can retrieve soft-deleted users.
       paranoid: false,
     });
@@ -304,7 +322,12 @@ const createUser = async (req, res, next) => {
       mfa_enabled = false,
       is_active = true,
     } = req.body || {};
-    if (!text(name) || !text(email) || !positiveInt(role_id, null)) {
+    const roleIds = normalizeRoleIds(req.body.roleIds ?? [role_id]);
+    const requestedPrimaryRoleId = optionalPositiveInt(req.body.primaryRoleId);
+    const primaryRoleId = roleIds.includes(requestedPrimaryRoleId)
+      ? requestedPrimaryRoleId
+      : roleIds[0] || null;
+    if (!text(name) || !text(email) || !roleIds.length) {
       return res
         .status(400)
         .json({ code: -1, message: "Se requiere nombre, correo, y rol." });
@@ -314,14 +337,11 @@ const createUser = async (req, res, next) => {
       return res
         .status(409)
         .json({ code: -1, message: "El email ya esta registrado" });
-    if (!(await Role.findByPk(role_id)))
-      return res
-        .status(400)
-        .json({ code: -1, message: "El rol seleccionado no existe" });
     const companyIds = normalizeCompanyIds(req.body.companyIds);
     const user = await User.sequelize.transaction(async (transaction) => {
+      await validateRoleIds(roleIds, transaction);
       await assertAdminCapacity({
-        roleId: Number(role_id),
+        roleIds,
         isActive: Boolean(is_active),
         transaction,
       });
@@ -329,7 +349,7 @@ const createUser = async (req, res, next) => {
         {
           name: text(name),
           email: normalizedEmail,
-          role_id: Number(role_id),
+          role_id: primaryRoleId,
           is_ldap: Boolean(is_ldap),
           mfa_enabled: Boolean(mfa_enabled),
           is_active: Boolean(is_active),
@@ -339,6 +359,7 @@ const createUser = async (req, res, next) => {
         { transaction },
       );
       await replaceCompanies(created.id, companyIds, transaction);
+      await replaceUserPermissions(created.id, roleIds, transaction);
       return loadUser(created.id, { transaction });
     });
     res
@@ -365,6 +386,15 @@ const updateUser = async (req, res, next) => {
     const body = req.body || {};
     const requestedRoleId =
       body.role_id === undefined ? undefined : optionalPositiveInt(body.role_id);
+    const requestedRoleIds =
+      body.roleIds === undefined
+        ? requestedRoleId === undefined
+          ? undefined
+          : requestedRoleId
+            ? [requestedRoleId]
+            : []
+        : normalizeRoleIds(body.roleIds);
+    const requestedPrimaryRoleId = optionalPositiveInt(body.primaryRoleId);
     if (
       requestedRoleId !== undefined &&
       requestedRoleId !== null &&
@@ -393,12 +423,20 @@ const updateUser = async (req, res, next) => {
     if (updates.is_active !== undefined && !user.temporary_password)
       updates.status = updates.is_active ? "active" : "inactive";
     const updated = await User.sequelize.transaction(async (transaction) => {
+      const roleIds = requestedRoleIds === undefined ? [Number(user.role_id)].filter(Boolean) : requestedRoleIds;
+      await validateRoleIds(roleIds, transaction);
+      const primaryRoleId = roleIds.includes(requestedPrimaryRoleId)
+        ? requestedPrimaryRoleId
+        : roleIds.includes(requestedRoleId)
+          ? requestedRoleId
+          : roleIds[0] || null;
       await assertAdminCapacity({
         user,
-        roleId: updates.role_id === undefined ? user.role_id : updates.role_id,
+        roleIds,
         isActive: updates.is_active === undefined ? user.is_active : updates.is_active,
         transaction,
       });
+      if (requestedRoleIds !== undefined) updates.role_id = primaryRoleId;
       await user.update(updates, { transaction });
       if (body.companyIds !== undefined)
         await replaceCompanies(
@@ -406,6 +444,8 @@ const updateUser = async (req, res, next) => {
           normalizeCompanyIds(body.companyIds),
           transaction,
         );
+      if (requestedRoleIds !== undefined)
+        await replaceUserPermissions(id, roleIds, transaction);
       return loadUser(id, { transaction });
     });
     res.json({ code: 1, message: "Success", data: serialize(updated) });
