@@ -631,8 +631,13 @@ const loginWithMicrosoftSso = asyncRoute(async (req, res) => {
   if (!email) throw fail("Microsoft no devolvio un correo para el usuario", 401);
 
   let user = await User.findOne({ where: { email }, paranoid: false });
-  const requiresProvisioning =
-    !user || user.deleted_at || !user.is_active || !user.role_id;
+  const assignedRole = user?.role_id
+    ? await Role.findByPk(user.role_id)
+    : null;
+  // Only new Microsoft users are provisioned automatically. An existing user
+  // whose role was deleted must remain without a role until an administrator
+  // explicitly assigns one again.
+  const requiresProvisioning = !user;
 
   let profile = null;
   try {
@@ -663,7 +668,11 @@ const loginWithMicrosoftSso = asyncRoute(async (req, res) => {
   } else {
     if (user.deleted_at) await user.restore();
     await user.update({
-      role_id: user.role_id || resolution.role?.id || null,
+      role_id: requiresProvisioning
+        ? resolution.role?.id ?? null
+        : assignedRole
+          ? user.role_id
+          : null,
       name: user.name || microsoftUserName(claims, profile, email),
       status: "active",
       temporary_password: false,

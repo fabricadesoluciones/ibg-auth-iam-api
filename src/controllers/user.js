@@ -65,6 +65,24 @@ const normalizeCompanyIds = (value) => [
       .filter((id) => Number.isInteger(id) && id > 0),
   ),
 ];
+const ADMIN_ROLE_ID = 1;
+const assertAdminCapacity = async ({ user, roleId, isActive, transaction }) => {
+  if (Number(roleId) !== ADMIN_ROLE_ID || !Boolean(isActive)) return;
+
+  const isAlreadyActiveAdmin =
+    user && Number(user.role_id) === ADMIN_ROLE_ID && Boolean(user.is_active);
+  if (isAlreadyActiveAdmin) return;
+
+  const activeAdmins = await User.count({
+    where: { role_id: ADMIN_ROLE_ID, is_active: true },
+    transaction,
+  });
+  if (activeAdmins >= 2) {
+    const error = new Error("Solo pueden existir dos usuarios activos con el rol Admin.");
+    error.statusCode = 400;
+    throw error;
+  }
+};
 const loadUser = (id, options = {}) =>
   User.findByPk(id, {
     attributes: userAttributes,
@@ -302,6 +320,11 @@ const createUser = async (req, res, next) => {
         .json({ code: -1, message: "El rol seleccionado no existe" });
     const companyIds = normalizeCompanyIds(req.body.companyIds);
     const user = await User.sequelize.transaction(async (transaction) => {
+      await assertAdminCapacity({
+        roleId: Number(role_id),
+        isActive: Boolean(is_active),
+        transaction,
+      });
       const created = await User.create(
         {
           name: text(name),
@@ -340,7 +363,13 @@ const updateUser = async (req, res, next) => {
         .status(404)
         .json({ code: -1, message: "No encontrado", data: {} });
     const body = req.body || {};
-    if (body.role_id !== undefined && !(await Role.findByPk(body.role_id)))
+    const requestedRoleId =
+      body.role_id === undefined ? undefined : optionalPositiveInt(body.role_id);
+    if (
+      requestedRoleId !== undefined &&
+      requestedRoleId !== null &&
+      !(await Role.findByPk(requestedRoleId))
+    )
       return res
         .status(400)
         .json({ code: -1, message: "El rol seleccionado no existe" });
@@ -353,12 +382,23 @@ const updateUser = async (req, res, next) => {
       "is_active",
     ])
       if (body[key] !== undefined)
-        updates[key] = key === "name" ? text(body[key]) : body[key];
+        updates[key] =
+          key === "name"
+            ? text(body[key])
+            : key === "role_id"
+              ? requestedRoleId
+              : body[key];
     if (body.email !== undefined)
       updates.email = text(body.email).toLowerCase();
     if (updates.is_active !== undefined && !user.temporary_password)
       updates.status = updates.is_active ? "active" : "inactive";
     const updated = await User.sequelize.transaction(async (transaction) => {
+      await assertAdminCapacity({
+        user,
+        roleId: updates.role_id === undefined ? user.role_id : updates.role_id,
+        isActive: updates.is_active === undefined ? user.is_active : updates.is_active,
+        transaction,
+      });
       await user.update(updates, { transaction });
       if (body.companyIds !== undefined)
         await replaceCompanies(
