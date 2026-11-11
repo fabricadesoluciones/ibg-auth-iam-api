@@ -18,7 +18,7 @@ const {
   Position,
   Role,
 } = require("../models");
-
+ 
 const asyncRoute = (handler) => (req, res, next) =>
   Promise.resolve(handler(req, res, next)).catch(next);
 const fail = (message, statusCode = 400, details = null) =>
