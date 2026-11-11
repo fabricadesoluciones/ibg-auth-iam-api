@@ -202,12 +202,6 @@ const resolveMicrosoftRole = async (organization) =>
       roles.find((item) => normalizeCatalogValue(item.name) === normalizedPosition) ||
       roles.find((item) => DEFAULT_INTERNAL_ROLE_NAMES.includes(normalizeCatalogValue(item.name))) ||
       (roles.length === 1 ? roles[0] : null);
-    if (!role) {
-      throw fail(
-        "No existe un rol configurado para el alcance organizacional del usuario de Microsoft.",
-        403,
-      );
-    }
     return { role, area, department, position };
   });
 const microsoftUserName = (claims, profile, email) =>
@@ -636,6 +630,10 @@ const loginWithMicrosoftSso = asyncRoute(async (req, res) => {
     .toLowerCase();
   if (!email) throw fail("Microsoft no devolvio un correo para el usuario", 401);
 
+  let user = await User.findOne({ where: { email }, paranoid: false });
+  const requiresProvisioning =
+    !user || user.deleted_at || !user.is_active || !user.role_id;
+
   let profile = null;
   try {
     profile = await fetchMicrosoftProfile(data.access_token);
@@ -643,12 +641,13 @@ const loginWithMicrosoftSso = asyncRoute(async (req, res) => {
     // Los claims del id_token siguen siendo suficientes para resolver el alcance.
   }
   const organization = microsoftOrganization(claims, profile);
-  const resolution = await resolveMicrosoftRole(organization);
-  let user = await User.findOne({ where: { email }, paranoid: false });
+  const resolution = requiresProvisioning
+    ? await resolveMicrosoftRole(organization)
+    : null;
 
   if (!user) {
     user = await User.create({
-      role_id: resolution.role.id,
+      role_id: resolution.role?.id ?? null,
       name: microsoftUserName(claims, profile, email),
       email,
       password_hash: null,
@@ -664,7 +663,7 @@ const loginWithMicrosoftSso = asyncRoute(async (req, res) => {
   } else {
     if (user.deleted_at) await user.restore();
     await user.update({
-      role_id: user.role_id || resolution.role.id,
+      role_id: user.role_id || resolution.role?.id || null,
       name: user.name || microsoftUserName(claims, profile, email),
       status: "active",
       temporary_password: false,
@@ -679,7 +678,11 @@ const loginWithMicrosoftSso = asyncRoute(async (req, res) => {
       claims,
       profile,
       organization,
-      assigned_role: { id: resolution.role.id, name: resolution.role.name },
+      assigned_role: resolution
+        ? resolution.role
+          ? { id: resolution.role.id, name: resolution.role.name }
+          : null
+        : { id: user.role_id, name: null },
       updated_at: new Date().toISOString(),
     }),
   });
