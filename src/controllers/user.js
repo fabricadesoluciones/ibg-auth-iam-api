@@ -353,7 +353,7 @@ const createUser = async (req, res, next) => {
         .json({
           code: -1,
           message: existingUser.deleted_at
-            ? "Este usuario está en Eliminados. Ve a Recuperar para restaurarlo."
+            ? "Este usuario está en Eliminados. Ve a Eliminados para restaurarlo."
             : "El email ya esta registrado",
         });
     const companyIds = normalizeCompanyIds(req.body.companyIds);
