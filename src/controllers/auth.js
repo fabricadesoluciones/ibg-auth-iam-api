@@ -252,7 +252,7 @@ const providerUser = (user) => !bool(user.is_ldap) && bool(user.mfa_enabled);
 const firstAccess = (user, type) =>
   portalType(type) === "proveedor" &&
   providerUser(user) &&
-  (bool(user.temporary_password) || user.status === "pending");
+  bool(user.temporary_password);
 const createSession = async (user, type) => {
   const token = sign({
     id: user.id,
@@ -531,7 +531,8 @@ const completeFirstAccess = asyncRoute(async (req, res) => {
   await req.user.update({
     password_hash: await bcrypt.hash(String(new_password), 10),
     temporary_password: false,
-    status: "active",
+    // El proveedor conserva pending hasta que complete la prealta y documentos.
+    status: "pending",
     email_verified_at: new Date(),
     activation_token: null,
     password_reset_attempts: 0,
