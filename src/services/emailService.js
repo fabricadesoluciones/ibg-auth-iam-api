@@ -98,18 +98,68 @@ const buildPasswordResetEmail = ({ resetLink, expiresInMinutes }) => {
   };
 };
 
-const resolveRecipient = (recipient) => {
+const buildProviderWelcomeEmail = ({ name, email, temporaryPassword, loginUrl }) => ({
+  subject: "Bienvenido al Portal de Proveedores de IB Group",
+  text: [
+    `Hola ${name || ""}`.trim(),
+    "",
+    "Tu cuenta de proveedor ha sido creada.",
+    `Correo: ${email}`,
+    `Contrasena temporal: ${temporaryPassword}`,
+    "",
+    `Ingresa al portal: ${loginUrl}`,
+    "En tu primer acceso deberas cambiar la contrasena temporal.",
+  ].join("\n"),
+  html: emailLayout({
+    title: "Tu acceso al Portal de Proveedores",
+    preview: "Tu cuenta y contraseña temporal están listas",
+    content: `<p>Hola ${escapeHtml(name || "")},</p><p>Tu cuenta de proveedor ha sido creada.</p><p><strong>Correo:</strong> ${escapeHtml(email)}<br /><strong>Contraseña temporal:</strong> ${escapeHtml(temporaryPassword)}</p><p><a href="${escapeHtml(loginUrl)}">Ingresar al portal</a></p><p>En tu primer acceso deberás cambiar la contraseña temporal.</p>`,
+  }),
+});
+
+const buildProviderPasswordResetEmail = ({ name, temporaryPassword, loginUrl }) => ({
+  subject: "Reinicio de contraseña del Portal de Proveedores",
+  text: [
+    `Hola ${name || ""}`.trim(),
+    "",
+    "Un administrador reinicio tu contrasena.",
+    `Nueva contrasena temporal: ${temporaryPassword}`,
+    "",
+    `Ingresa al portal: ${loginUrl}`,
+    "En tu siguiente acceso deberas cambiar esta contrasena.",
+  ].join("\n"),
+  html: emailLayout({
+    title: "Reinicio de contraseña",
+    preview: "Tu nueva contraseña temporal está lista",
+    content: `<p>Hola ${escapeHtml(name || "")},</p><p>Un administrador reinició tu contraseña del Portal de Proveedores.</p><p><strong>Nueva contraseña temporal:</strong> ${escapeHtml(temporaryPassword)}</p><p><a href="${escapeHtml(loginUrl)}">Ingresar al portal</a></p><p>En tu siguiente acceso deberás cambiar esta contraseña.</p>`,
+  }),
+});
+
+const TEST_EMAIL_RECIPIENTS = new Set([
+  "jherrera@fabricadesoluciones.com",
+  "david@ibg.com",
+]);
+const parseRecipients = (value) =>
+  String(value || "")
+    .split(",")
+    .map((recipient) => recipient.trim().toLowerCase())
+    .filter(Boolean);
+
+const resolveRecipients = (recipient) => {
   if (String(process.env.SEND_EMAIL_TEST || "").trim() !== "1") {
-    return recipient;
+    return Array.isArray(recipient) ? recipient : parseRecipients(recipient);
   }
 
-  const testRecipient = String(process.env.SEND_EMAIL_TEST_TO || "").trim();
-  if (!testRecipient) {
+  const testRecipients = parseRecipients(process.env.SEND_EMAIL_TEST_TO);
+  if (!testRecipients.length) {
     throw new Error(
       "SEND_EMAIL_TEST esta habilitado pero SEND_EMAIL_TEST_TO no esta configurado",
     );
   }
-  return testRecipient;
+  if (testRecipients.some((recipient) => !TEST_EMAIL_RECIPIENTS.has(recipient))) {
+    throw new Error("SEND_EMAIL_TEST_TO contiene destinatarios no autorizados");
+  }
+  return testRecipients;
 };
 
 const getSmtpTransport = () => {
@@ -147,11 +197,17 @@ const sendEmail = async ({ to, subject, text, html }) => {
   const transport = getSmtpTransport() || getSesTransport();
   return transport.sendMail({
     from,
-    to: resolveRecipient(to),
+    to: resolveRecipients(to),
     subject,
     text,
     html,
   });
 };
 
-module.exports = { sendEmail, buildMfaEmail, buildPasswordResetEmail };
+module.exports = {
+  sendEmail,
+  buildMfaEmail,
+  buildPasswordResetEmail,
+  buildProviderWelcomeEmail,
+  buildProviderPasswordResetEmail,
+};

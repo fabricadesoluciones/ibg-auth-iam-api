@@ -2,6 +2,10 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const { assertDatabaseConfigured } = require("../database");
 const { User, Role, UserSession } = require("../models");
+const { sendEmail, buildProviderPasswordResetEmail } = require("../services/emailService");
+
+const providerPortalUrl = () =>
+  String(process.env.PROVIDER_PORTAL_URL || "http://localhost:8080").replace(/\/$/, "");
 
 const resetProviderPassword = async (req, res, next) => {
   try {
@@ -35,6 +39,7 @@ const resetProviderPassword = async (req, res, next) => {
           temporary_password: true,
           status: "pending",
           activation_token: crypto.randomUUID(),
+          mfa_enabled: true,
           password_reset_attempts: 0,
           last_failed_login: null,
         },
@@ -44,6 +49,14 @@ const resetProviderPassword = async (req, res, next) => {
         { is_active: false },
         { where: { user_id: user.id, is_active: true }, transaction },
       );
+    });
+    await sendEmail({
+      to: user.email,
+      ...buildProviderPasswordResetEmail({
+        name: user.name,
+        temporaryPassword: password,
+        loginUrl: providerPortalUrl(),
+      }),
     });
     res.json({ code: 1, message: "Contrasena reiniciada correctamente." });
   } catch (error) {

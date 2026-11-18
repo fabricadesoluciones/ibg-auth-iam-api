@@ -1,7 +1,9 @@
 const { Op, col, cast, where } = require("sequelize");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const { assertDatabaseConfigured } = require("../database");
 const { User, Role, Company, UserCompany, UserPermission, RolePermission, UserRole } = require("../models");
+const { sendEmail, buildProviderWelcomeEmail } = require("../services/emailService");
 
 const userAttributes = [
   "id",
@@ -110,6 +112,10 @@ const replaceCompanies = async (userId, companyIds, transaction) => {
 const normalizeRoleIds = (value) => [
   ...new Set((Array.isArray(value) ? value : []).map(optionalPositiveInt).filter(Boolean)),
 ];
+const isProviderRole = (role) =>
+  String(role?.name || "").trim().toLowerCase().includes("proveedor");
+const providerPortalUrl = () =>
+  String(process.env.PROVIDER_PORTAL_URL || "http://localhost:8080").replace(/\/$/, "");
 const validateRoleIds = async (roleIds, transaction) => {
   if (!roleIds.length) return [];
   const roles = await Role.findAll({
@@ -357,6 +363,15 @@ const createUser = async (req, res, next) => {
             : "El email ya esta registrado",
         });
     const companyIds = normalizeCompanyIds(req.body.companyIds);
+    const roles = await Role.findAll({
+      where: { id: { [Op.in]: roleIds } },
+      attributes: ["id", "name"],
+    });
+    const isProvider = !Boolean(is_ldap) &&
+      (Boolean(mfa_enabled) || roles.some(isProviderRole));
+    const temporaryPassword = isProvider
+      ? crypto.randomBytes(9).toString("base64url")
+      : null;
     const user = await User.sequelize.transaction(async (transaction) => {
       await validateRoleIds(roleIds, transaction);
       await assertAdminCapacity({
@@ -370,10 +385,17 @@ const createUser = async (req, res, next) => {
           email: normalizedEmail,
           role_id: primaryRoleId,
           is_ldap: Boolean(is_ldap),
-          mfa_enabled: Boolean(mfa_enabled),
+          mfa_enabled: isProvider || Boolean(mfa_enabled),
           is_active: Boolean(is_active),
-          status: Boolean(is_active) ? "active" : "inactive",
-          temporary_password: false,
+          status: isProvider ? "pending" : Boolean(is_active) ? "active" : "inactive",
+          password_hash: temporaryPassword
+            ? await bcrypt.hash(temporaryPassword, 10)
+            : null,
+          temporary_password: isProvider,
+          email_verified_at: isProvider ? null : new Date(),
+          activation_token: isProvider ? crypto.randomUUID() : null,
+          password_reset_attempts: 0,
+          last_failed_login: null,
         },
         { transaction },
       );
@@ -382,6 +404,17 @@ const createUser = async (req, res, next) => {
       await replaceUserPermissions(created.id, roleIds, transaction);
       return loadUser(created.id, { transaction });
     });
+    if (isProvider) {
+      await sendEmail({
+        to: normalizedEmail,
+        ...buildProviderWelcomeEmail({
+          name: user.name,
+          email: normalizedEmail,
+          temporaryPassword,
+          loginUrl: providerPortalUrl(),
+        }),
+      });
+    }
     res
       .status(201)
       .json({ code: 1, message: "Success", data: serialize(user) });
