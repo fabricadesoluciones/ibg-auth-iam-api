@@ -341,10 +341,21 @@ const createUser = async (req, res, next) => {
         .json({ code: -1, message: "Se requiere nombre, correo, y rol." });
     }
     const normalizedEmail = text(email).toLowerCase();
-    if (await User.findOne({ where: { email: normalizedEmail } }))
+    const existingUser = await User.findOne({
+      where: { email: normalizedEmail },
+      // El índice único de email incluye usuarios con baja lógica; debemos
+      // detectarlos antes de intentar el INSERT para devolver una guía útil.
+      paranoid: false,
+    });
+    if (existingUser)
       return res
         .status(409)
-        .json({ code: -1, message: "El email ya esta registrado" });
+        .json({
+          code: -1,
+          message: existingUser.deleted_at
+            ? "Este usuario está en Eliminados. Ve a Recuperar para restaurarlo."
+            : "El email ya esta registrado",
+        });
     const companyIds = normalizeCompanyIds(req.body.companyIds);
     const user = await User.sequelize.transaction(async (transaction) => {
       await validateRoleIds(roleIds, transaction);
