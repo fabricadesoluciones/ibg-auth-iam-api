@@ -1,7 +1,7 @@
 const { Op, col, cast, where } = require("sequelize");
 const bcrypt = require("bcryptjs");
 const { assertDatabaseConfigured } = require("../database");
-const { User, Role, Company, UserCompany, UserPermission, RolePermission } = require("../models");
+const { User, Role, Company, UserCompany, UserPermission, RolePermission, UserRole } = require("../models");
 
 const userAttributes = [
   "id",
@@ -38,7 +38,9 @@ const serialize = (user) => {
   id: user.id,
   name: user.name,
   role_id: user.role_id ? Number(user.role_id) : null,
-  roleIds: user.role_id ? [Number(user.role_id)] : [],
+  roleIds: (user.role_assignments || []).length
+    ? user.role_assignments.map((assignment) => Number(assignment.role_id)).filter(Number.isInteger)
+    : user.role_id ? [Number(user.role_id)] : [],
   email: user.email,
   status: user.status,
   temporary_password: user.temporary_password,
@@ -61,6 +63,7 @@ const companyInclude = {
   through: { attributes: [] },
   required: false,
 };
+const roleAssignmentInclude = { model: UserRole, as: "role_assignments", attributes: ["role_id"], required: false };
 const normalizeCompanyIds = (value) => [
   ...new Set(
     (Array.isArray(value) ? value : [])
@@ -83,7 +86,7 @@ const assertAdminCapacity = async ({ user, roleIds, isActive, transaction }) => 
 const loadUser = (id, options = {}) =>
   User.findByPk(id, {
     attributes: userAttributes,
-    include: [companyInclude],
+    include: [companyInclude, roleAssignmentInclude],
     ...options,
   });
 const replaceCompanies = async (userId, companyIds, transaction) => {
@@ -132,6 +135,10 @@ const replaceUserPermissions = async (userId, roleIds, transaction) => {
   await UserPermission.destroy({ where: { user_id: userId }, force: true, transaction });
   if (permissionIds.length)
     await UserPermission.bulkCreate(permissionIds.map((permission_id) => ({ user_id: userId, permission_id })), { transaction });
+};
+const replaceUserRoles = async (userId, roleIds, transaction) => {
+  await UserRole.destroy({ where: { user_id: userId }, transaction });
+  if (roleIds.length) await UserRole.bulkCreate(roleIds.map((role_id) => ({ user_id: userId, role_id })), { transaction });
 };
 
 const getUsers = async (req, res, next) => {
@@ -191,16 +198,17 @@ const getUsers = async (req, res, next) => {
         roleIds.length ? { role_id: { [Op.in]: roleIds } } : { role_id: -1 },
       );
     }
-    const interno = flag(query.interno);
-    const proveedor = flag(query.proveedor);
-    const activo = flag(query.activo);
-    if (interno !== null) and.push({ is_ldap: interno ? 1 : 0 });
-    if (proveedor !== null)
-      and.push({
-        is_ldap: proveedor ? 0 : 1,
-        mfa_enabled: proveedor ? 1 : { [Op.in]: [0, false] },
-      });
-    if (activo !== null) and.push({ is_active: activo ? 1 : 0 });
+    const tipo = text(query.tipo).toLowerCase();
+    const mfa = text(query.mfa).toLowerCase();
+    const estado = text(query.estado).toLowerCase();
+    if ("interno".startsWith(tipo) && tipo) and.push({ is_ldap: 1 });
+    if ("proveedor".startsWith(tipo) && tipo) and.push({ is_ldap: 0 });
+    if ("activo".startsWith(mfa) && mfa) and.push({ mfa_enabled: 1 });
+    if ("pendiente".startsWith(mfa) && mfa)
+      and.push({ mfa_enabled: { [Op.in]: [0, false] } });
+    if ("activo".startsWith(estado) && estado) and.push({ is_active: 1 });
+    if ("bloqueado".startsWith(estado) && estado)
+      and.push({ is_active: { [Op.in]: [0, false] } });
     if (and.length) filters[Op.and] = and;
 
     const companyInclude = {
@@ -222,7 +230,7 @@ const getUsers = async (req, res, next) => {
     };
     const { count, rows } = await User.findAndCountAll({
       attributes: userAttributes,
-      include: [companyInclude],
+      include: [companyInclude, roleAssignmentInclude],
       where: filters,
       order: [[sortField, sortOrder]],
       limit,
@@ -261,7 +269,7 @@ const getDeletedUsers = async (req, res, next) => {
         : "ASC";
     const { count, rows } = await User.findAndCountAll({
       attributes: userAttributes,
-      include: [companyInclude],
+      include: [companyInclude, roleAssignmentInclude],
       paranoid: false,
       where: { deleted_at: { [Op.ne]: null } },
       order: [[sortField, sortOrder]],
@@ -296,7 +304,7 @@ const getUserById = async (req, res, next) => {
     }
     const user = await User.findByPk(id, {
       attributes: userAttributes,
-      include: [companyInclude],
+      include: [companyInclude, roleAssignmentInclude],
       // Matches the legacy detail endpoint, which can retrieve soft-deleted users.
       paranoid: false,
     });
@@ -359,6 +367,7 @@ const createUser = async (req, res, next) => {
         { transaction },
       );
       await replaceCompanies(created.id, companyIds, transaction);
+      await replaceUserRoles(created.id, roleIds, transaction);
       await replaceUserPermissions(created.id, roleIds, transaction);
       return loadUser(created.id, { transaction });
     });
@@ -444,6 +453,8 @@ const updateUser = async (req, res, next) => {
           normalizeCompanyIds(body.companyIds),
           transaction,
         );
+      if (requestedRoleIds !== undefined)
+        await replaceUserRoles(id, roleIds, transaction);
       if (requestedRoleIds !== undefined)
         await replaceUserPermissions(id, roleIds, transaction);
       return loadUser(id, { transaction });

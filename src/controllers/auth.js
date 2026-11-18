@@ -18,6 +18,7 @@ const {
   Position,
   Role,
   UserPermission,
+  UserRole,
 } = require("../models");
  
 const asyncRoute = (handler) => (req, res, next) =>
@@ -109,7 +110,10 @@ const userPayload = async (user) => {
   const permissionIds = assigned
     .map((row) => Number(row.permission_id))
     .filter(Number.isInteger);
-  const roleIds = user.role_id ? [Number(user.role_id)] : [];
+  const assignments = await UserRole.findAll({ where: { user_id: user.id }, attributes: ["role_id"], raw: true });
+  const roleIds = assignments.length
+    ? assignments.map((row) => Number(row.role_id)).filter(Number.isInteger)
+    : user.role_id ? [Number(user.role_id)] : [];
   return {
   id: user.id,
   name: user.name,

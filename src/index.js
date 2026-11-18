@@ -37,6 +37,7 @@ app.use(
 app.use("/api/v1/roles", require("./routes/roles"));
 app.use("/api/v1/user", require("./routes/user"));
 app.use("/api/v1/providers", require("./routes/providers"));
+app.use("/api/v1/admin", require("./routes/admin"));
 
 app.use((req, res) => {
   res.status(404).json({
